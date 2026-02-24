@@ -1,6 +1,7 @@
 # Emergency Message Filtering AI App
 
 email me @ naveenmanoharanhere@gmail.com for the dataset and model
+
 A mobile application that automatically detects emergency messages and overrides Android Do Not Disturb (DND) mode to ensure urgent alerts are not missed.
 
 The system uses a lightweight, quantized TensorFlow Lite model to classify incoming messages in real time.
