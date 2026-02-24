@@ -16,4 +16,4 @@ def predict(message):
     print(label, prob)
 
 
-predict("Please call ambulance now")
+predict("take action")
