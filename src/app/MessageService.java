@@ -1,25 +1,36 @@
 package com.example.emergencyfilter;
 
 import android.app.NotificationManager;
-import android.content.*;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
 import android.content.res.AssetFileDescriptor;
 import android.provider.Telephony;
 import android.telephony.SmsMessage;
 import android.widget.Toast;
 
+import org.json.JSONObject;
 import org.tensorflow.lite.Interpreter;
 
-import java.io.*;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 
-import okhttp3.*;
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.MediaType;
+import okhttp3.MultipartBody;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 
 public class MessageService extends BroadcastReceiver {
 
     private static Interpreter interpreter;
     private static final String API_KEY = "YOUR_ELEVENLABS_API_KEY";
-
 
     public static void initialize(Context context) {
         try {
@@ -30,19 +41,20 @@ public class MessageService extends BroadcastReceiver {
     }
 
     private static MappedByteBuffer loadModel(Context context) throws Exception {
-
         AssetFileDescriptor fd =
                 context.getAssets().openFd("emergency_model.tflite");
 
-        FileInputStream input = new FileInputStream(fd.getFileDescriptor());
-        FileChannel channel = input.getChannel();
+        FileInputStream inputStream =
+                new FileInputStream(fd.getFileDescriptor());
 
-        return channel.map(
+        FileChannel fileChannel = inputStream.getChannel();
+
+        return fileChannel.map(
                 FileChannel.MapMode.READ_ONLY,
                 fd.getStartOffset(),
-                fd.getDeclaredLength());
+                fd.getDeclaredLength()
+        );
     }
-
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -55,9 +67,16 @@ public class MessageService extends BroadcastReceiver {
                 processText(context, sms.getMessageBody());
             }
         }
-    }
 
-    /* ================= TEXT CLASSIFICATION ================= */
+        if ("VOICE_NOTE_RECEIVED".equals(intent.getAction())) {
+
+            String path = intent.getStringExtra("audioPath");
+
+            if (path != null) {
+                processAudio(context, new File(path));
+            }
+        }
+    }
 
     private static void processText(Context context, String text) {
 
@@ -71,12 +90,11 @@ public class MessageService extends BroadcastReceiver {
         }
     }
 
-
     public static void processAudio(Context context, File audioFile) {
 
         OkHttpClient client = new OkHttpClient();
 
-        RequestBody body =
+        RequestBody requestBody =
                 new MultipartBody.Builder()
                         .setType(MultipartBody.FORM)
                         .addFormDataPart(
@@ -84,13 +102,17 @@ public class MessageService extends BroadcastReceiver {
                                 audioFile.getName(),
                                 RequestBody.create(
                                         audioFile,
-                                        MediaType.parse("audio/wav")))
+                                        MediaType.parse("audio/mpeg")
+                                )
+                        )
+                        .addFormDataPart("model_id", "scribe_v1")
                         .build();
 
         Request request = new Request.Builder()
                 .url("https://api.elevenlabs.io/v1/speech-to-text")
                 .addHeader("xi-api-key", API_KEY)
-                .post(body)
+                .addHeader("Accept", "application/json")
+                .post(requestBody)
                 .build();
 
         client.newCall(request).enqueue(new Callback() {
@@ -104,19 +126,24 @@ public class MessageService extends BroadcastReceiver {
             public void onResponse(Call call, Response response)
                     throws IOException {
 
+                if (!response.isSuccessful()) {
+                    return;
+                }
+
                 String result = response.body().string();
 
-                String transcript =
-                        result.replaceAll(".*\"text\":\"", "")
-                              .replaceAll("\".*", "");
-
-                processText(context, transcript);
+                try {
+                    JSONObject json = new JSONObject(result);
+                    String transcript = json.getString("text");
+                    processText(context, transcript);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
             }
         });
     }
 
-
-    private static void triggerEmergency(Context context, String msg) {
+    private static void triggerEmergency(Context context, String message) {
 
         NotificationManager manager =
                 (NotificationManager)
@@ -124,12 +151,13 @@ public class MessageService extends BroadcastReceiver {
 
         if (manager.isNotificationPolicyAccessGranted()) {
             manager.setInterruptionFilter(
-                    NotificationManager.INTERRUPTION_FILTER_ALL);
+                    NotificationManager.INTERRUPTION_FILTER_ALL
+            );
         }
 
         Toast.makeText(
                 context,
-                "🚨 Emergency Detected:\n" + msg,
+                "Emergency Detected: " + message,
                 Toast.LENGTH_LONG
         ).show();
     }
